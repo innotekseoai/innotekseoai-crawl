@@ -1,0 +1,70 @@
+@import 'tailwindcss';
+
+:root {
+  --bg: #06080f;
+  --surface: #0d1117;
+  --surface2: #111722;
+  --border: #1e293b;
+  --accent: #00e5ff;
+  --accent2: #7b5cf6;
+  --accent3: #00ff9d;
+  --text: #e8edf5;
+  --muted: #6b7a99;
+}
+
+@theme {
+  --color-bg: #06080f;
+  --color-surface: #0d1117;
+  --color-surface2: #111722;
+  --color-border: #1e293b;
+  --color-accent: #00e5ff;
+  --color-accent2: #7b5cf6;
+  --color-accent3: #00ff9d;
+  --color-text: #e8edf5;
+  --color-muted: #6b7a99;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Grade colors */
+.grade-a { color: #00ff9d; }
+.grade-b { color: #7bff5c; }
+.grade-c { color: #ffd600; }
+.grade-d { color: #ff8c00; }
+.grade-f { color: #ff3d3d; }
+
+.grade-bg-a { background: rgba(0, 255, 157, 0.15); border-color: rgba(0, 255, 157, 0.3); }
+.grade-bg-b { background: rgba(123, 255, 92, 0.15); border-color: rgba(123, 255, 92, 0.3); }
+.grade-bg-c { background: rgba(255, 214, 0, 0.15); border-color: rgba(255, 214, 0, 0.3); }
+.grade-bg-d { background: rgba(255, 140, 0, 0.15); border-color: rgba(255, 140, 0, 0.3); }
+.grade-bg-f { background: rgba(255, 61, 61, 0.15); border-color: rgba(255, 61, 61, 0.3); }

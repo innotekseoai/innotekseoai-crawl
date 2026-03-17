@@ -1,0 +1,65 @@
+/**
+ * Drizzle ORM schema — SQLite tables for crawl data
+ */
+
+import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+
+export const crawls = sqliteTable('crawls', {
+  id: text('id').primaryKey(),
+  baseUrl: text('base_url').notNull(),
+  status: text('status', {
+    enum: ['pending', 'crawling', 'analyzing', 'completed', 'failed'],
+  }).notNull().default('pending'),
+  crawlerType: text('crawler_type', {
+    enum: ['native', 'browser'],
+  }).notNull().default('native'),
+  pagesCrawled: integer('pages_crawled').notNull().default(0),
+  pageLimit: integer('page_limit').notNull().default(50),
+  errorMessage: text('error_message'),
+  // Site-level analysis results
+  primaryJsonLd: text('primary_json_ld'),
+  llmsTxt: text('llms_txt'),
+  overallGrade: text('overall_grade', { enum: ['A', 'B', 'C', 'D', 'F'] }),
+  premiumScore: integer('premium_score'),
+  siteMetrics: text('site_metrics'), // JSON blob
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const crawlPages = sqliteTable('crawl_pages', {
+  id: text('id').primaryKey(),
+  crawlId: text('crawl_id').notNull().references(() => crawls.id),
+  url: text('url').notNull(),
+  title: text('title'),
+  description: text('description'),
+  markdownPath: text('markdown_path'), // path in data/mirrors/
+  charCount: integer('char_count'),
+  status: text('status', {
+    enum: ['pending', 'crawled', 'analyzed', 'failed'],
+  }).notNull().default('crawled'),
+  errorMessage: text('error_message'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const pageAnalyses = sqliteTable('page_analyses', {
+  id: text('id').primaryKey(),
+  crawlId: text('crawl_id').notNull().references(() => crawls.id),
+  crawlPageId: text('crawl_page_id').notNull().references(() => crawlPages.id),
+  url: text('url').notNull(),
+  jsonLd: text('json_ld'),
+  mirrorMarkdown: text('mirror_markdown'),
+  llmsTxtEntry: text('llms_txt_entry'),
+  entityClarityScore: real('entity_clarity_score'),
+  factDensityCount: integer('fact_density_count'),
+  wordCount: integer('word_count'),
+  contentQualityScore: real('content_quality_score'),
+  semanticStructureScore: real('semantic_structure_score'),
+  entityRichnessScore: real('entity_richness_score'),
+  citationReadinessScore: real('citation_readiness_score'),
+  technicalSeoScore: real('technical_seo_score'),
+  userIntentAlignmentScore: real('user_intent_alignment_score'),
+  trustSignalsScore: real('trust_signals_score'),
+  authorityScore: real('authority_score'),
+  geoRecommendations: text('geo_recommendations'), // JSON array
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
