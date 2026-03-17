@@ -13,7 +13,9 @@ import { ScoreChart } from '@/components/analysis/score-chart';
 import { GradeBreakdown } from '@/components/analysis/grade-breakdown';
 import { MetricBars } from '@/components/analysis/metric-bars';
 import { Recommendations } from '@/components/analysis/recommendations';
-import { ArrowLeft, Copy, RotateCcw } from 'lucide-react';
+import { PageScoreCell } from '@/components/crawl/page-score-cell';
+import { ArrowLeft, Copy, RotateCcw, Square, ArrowUpDown, Download, GitCompare } from 'lucide-react';
+import { ComparisonChart } from '@/components/analysis/comparison-chart';
 import Link from 'next/link';
 
 interface CrawlData {
@@ -65,6 +67,12 @@ export default function CrawlDetailPage({ params }: { params: Promise<{ id: stri
   const [sseMessage, setSseMessage] = useState('');
   const [copied, setCopied] = useState('');
   const [resuming, setResuming] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [sortField, setSortField] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [comparison, setComparison] = useState<any>(null);
+  const [comparing, setComparing] = useState(false);
   const startedRef = useRef(false);
 
   const pageLineCount = lines.filter((l) => l.type === 'page').length;
@@ -202,6 +210,45 @@ export default function CrawlDetailPage({ params }: { params: Promise<{ id: stri
     };
   }
 
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/crawl/${id}/cancel`, { method: 'POST' });
+      if (res.ok) {
+        setSseStatus('failed');
+        setSseMessage('Cancelled by user');
+        fetchData();
+      }
+    } catch {} finally {
+      setCancelling(false);
+    }
+  }
+
+  async function handleCompare() {
+    setComparing(true);
+    try {
+      // Find previous crawl for the same base URL
+      const listRes = await fetch('/api/crawl');
+      const listData = await listRes.json();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sameDomain = (listData.crawls ?? []).filter((c: any) =>
+        c.baseUrl === data?.crawl.baseUrl && c.id !== id && c.status === 'completed'
+      );
+      if (sameDomain.length === 0) {
+        setComparison({ error: 'No previous crawls found for this domain' });
+        return;
+      }
+      const prevId = sameDomain[0].id;
+      const res = await fetch(`/api/crawl/compare?a=${prevId}&b=${id}`);
+      if (res.ok) {
+        setComparison(await res.json());
+      } else {
+        setComparison({ error: 'Both crawls need completed analysis to compare' });
+      }
+    } catch { setComparison({ error: 'Failed to load comparison' }); }
+    finally { setComparing(false); }
+  }
+
   async function handleResume() {
     setResuming(true);
     try {
@@ -243,6 +290,22 @@ export default function CrawlDetailPage({ params }: { params: Promise<{ id: stri
         description={`Crawl started ${new Date(crawl.createdAt).toLocaleString()}`}
         actions={
           <div className="flex gap-2">
+            {isLive && (
+              <Button variant="secondary" size="sm" onClick={handleCancel} disabled={cancelling}>
+                <Square className="w-4 h-4" />
+                {cancelling ? 'Stopping...' : 'Stop'}
+              </Button>
+            )}
+            {isComplete && (
+              <div className="flex gap-1">
+                <a href={`/api/crawl/${id}/export?format=csv`} download>
+                  <Button variant="ghost" size="sm"><Download className="w-4 h-4" /> CSV</Button>
+                </a>
+                <a href={`/api/crawl/${id}/export?format=json`} download>
+                  <Button variant="ghost" size="sm"><Download className="w-4 h-4" /> JSON</Button>
+                </a>
+              </div>
+            )}
             {(crawl.status === 'failed' || (crawl.status === 'completed' && !sm)) && (
               <Button variant="secondary" size="sm" onClick={handleResume} disabled={resuming}>
                 <RotateCcw className={`w-4 h-4 ${resuming ? 'animate-spin' : ''}`} />
@@ -362,33 +425,110 @@ export default function CrawlDetailPage({ params }: { params: Promise<{ id: stri
             </>
           )}
 
-          {isComplete && data.pages.length > 0 && (
-            <Card>
-              <CardHeader><CardTitle>Crawled Pages ({data.pages.length})</CardTitle></CardHeader>
-              <div className="overflow-x-auto -mx-5 px-5">
-                <table className="w-full text-sm min-w-[480px]">
-                  <thead>
-                    <tr className="border-b border-border text-muted text-left">
-                      <th className="pb-2 pr-4 font-medium">#</th>
-                      <th className="pb-2 pr-4 font-medium">URL</th>
-                      <th className="pb-2 pr-4 font-medium">Title</th>
-                      <th className="pb-2 font-medium">Size</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.pages.map((p, i) => (
-                      <tr key={p.id} className="border-b border-border/30">
-                        <td className="py-2 pr-4 text-muted">{i + 1}</td>
-                        <td className="py-2 pr-4 text-accent truncate max-w-[200px]">{p.url}</td>
-                        <td className="py-2 pr-4 text-muted truncate max-w-[160px]">{p.title ?? '--'}</td>
-                        <td className="py-2 text-muted font-mono">
-                          {p.charCount ? `${(p.charCount / 1000).toFixed(1)}k` : '--'}
-                        </td>
+          {isComplete && data.pages.length > 0 && (() => {
+            // Build page-analysis map for score display
+            const analysisMap = new Map(analyses.map((a) => [a.url, a]));
+            const pagesWithScores = data.pages.map((p, i) => {
+              const a = analysisMap.get(p.url);
+              const avgScore = a ? (
+                ((a.entityClarityScore ?? 0) + (a.contentQualityScore ?? 0) + (a.semanticStructureScore ?? 0) +
+                 (a.entityRichnessScore ?? 0) + (a.citationReadinessScore ?? 0) + (a.technicalSeoScore ?? 0) +
+                 (a.userIntentAlignmentScore ?? 0) + (a.trustSignalsScore ?? 0) + (a.authorityScore ?? 0)) / 9
+              ) : null;
+              return { ...p, index: i, analysis: a ?? null, avgScore };
+            });
+
+            // Sort if field selected
+            const sorted = sortField ? [...pagesWithScores].sort((a, b) => {
+              let va: number | null = null, vb: number | null = null;
+              if (sortField === 'avg') { va = a.avgScore; vb = b.avgScore; }
+              else if (sortField === 'clarity') { va = a.analysis?.entityClarityScore ?? null; vb = b.analysis?.entityClarityScore ?? null; }
+              else if (sortField === 'quality') { va = a.analysis?.contentQualityScore ?? null; vb = b.analysis?.contentQualityScore ?? null; }
+              else if (sortField === 'seo') { va = a.analysis?.technicalSeoScore ?? null; vb = b.analysis?.technicalSeoScore ?? null; }
+              if (va === null && vb === null) return 0;
+              if (va === null) return 1;
+              if (vb === null) return -1;
+              return sortDir === 'asc' ? va - vb : vb - va;
+            }) : pagesWithScores;
+
+            function toggleSort(field: string) {
+              if (sortField === field) {
+                setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+              } else {
+                setSortField(field);
+                setSortDir('desc');
+              }
+            }
+
+            return (
+              <Card>
+                <CardHeader><CardTitle>Crawled Pages ({data.pages.length})</CardTitle></CardHeader>
+                <div className="overflow-x-auto -mx-5 px-5">
+                  <table className="w-full text-sm min-w-[600px]">
+                    <thead>
+                      <tr className="border-b border-border text-muted text-left">
+                        <th className="pb-2 pr-4 font-medium">#</th>
+                        <th className="pb-2 pr-4 font-medium">URL</th>
+                        <th className="pb-2 pr-2 font-medium cursor-pointer select-none" onClick={() => toggleSort('avg')}>
+                          Avg <ArrowUpDown className="w-3 h-3 inline" />
+                        </th>
+                        <th className="pb-2 pr-2 font-medium cursor-pointer select-none" onClick={() => toggleSort('clarity')}>
+                          Clarity <ArrowUpDown className="w-3 h-3 inline" />
+                        </th>
+                        <th className="pb-2 pr-2 font-medium cursor-pointer select-none" onClick={() => toggleSort('quality')}>
+                          Quality <ArrowUpDown className="w-3 h-3 inline" />
+                        </th>
+                        <th className="pb-2 pr-2 font-medium cursor-pointer select-none" onClick={() => toggleSort('seo')}>
+                          SEO <ArrowUpDown className="w-3 h-3 inline" />
+                        </th>
+                        <th className="pb-2 font-medium">Size</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {sorted.map((p) => (
+                        <tr key={p.id} className="border-b border-border/30">
+                          <td className="py-2 pr-4 text-muted">{p.index + 1}</td>
+                          <td className="py-2 pr-4 text-accent truncate max-w-[200px]">{p.url}</td>
+                          <td className="py-2 pr-2"><PageScoreCell score={p.avgScore} /></td>
+                          <td className="py-2 pr-2"><PageScoreCell score={p.analysis?.entityClarityScore ?? null} /></td>
+                          <td className="py-2 pr-2"><PageScoreCell score={p.analysis?.contentQualityScore ?? null} /></td>
+                          <td className="py-2 pr-2"><PageScoreCell score={p.analysis?.technicalSeoScore ?? null} /></td>
+                          <td className="py-2 text-muted font-mono">
+                            {p.charCount ? `${(p.charCount / 1000).toFixed(1)}k` : '--'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            );
+          })()}
+
+          {isComplete && sm && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Compare</CardTitle>
+                  {!comparison && (
+                    <Button variant="ghost" size="sm" onClick={handleCompare} disabled={comparing}>
+                      <GitCompare className="w-4 h-4" />
+                      {comparing ? 'Loading...' : 'Compare with previous'}
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              {comparison?.error && (
+                <p className="text-xs text-muted">{comparison.error}</p>
+              )}
+              {comparison?.deltas && (
+                <ComparisonChart
+                  deltas={comparison.deltas}
+                  beforeDate={comparison.before.date}
+                  afterDate={comparison.after.date}
+                />
+              )}
+              {!comparison && <p className="text-xs text-muted">Click to compare with the most recent previous crawl of this domain.</p>}
             </Card>
           )}
 

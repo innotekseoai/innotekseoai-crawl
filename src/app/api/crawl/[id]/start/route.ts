@@ -25,11 +25,13 @@ export async function POST(
     // Read config stored by POST /api/crawl
     let analyze = false;
     let modelPath: string | undefined;
+    let maxDepth: number | undefined;
     if (crawl.siteMetrics) {
       try {
         const config = JSON.parse(crawl.siteMetrics);
         analyze = config.analyze ?? false;
         modelPath = config.modelPath;
+        maxDepth = config.maxDepth ?? undefined;
       } catch { /* not config JSON, ignore */ }
     }
 
@@ -40,6 +42,7 @@ export async function POST(
       crawlerType: crawl.crawlerType as 'native' | 'browser',
       analyze,
       modelPath,
+      maxDepth,
     });
 
     return NextResponse.json({ id, status: 'starting' });

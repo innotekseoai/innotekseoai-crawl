@@ -24,6 +24,7 @@ const CREATE_TABLES_SQL = [
     crawler_type TEXT NOT NULL DEFAULT 'native',
     pages_crawled INTEGER NOT NULL DEFAULT 0,
     page_limit INTEGER NOT NULL DEFAULT 50,
+    max_depth INTEGER,
     error_message TEXT,
     primary_json_ld TEXT,
     llms_txt TEXT,
@@ -39,6 +40,13 @@ const CREATE_TABLES_SQL = [
     url TEXT NOT NULL,
     title TEXT,
     description TEXT,
+    canonical_url TEXT,
+    og_title TEXT,
+    og_description TEXT,
+    og_image TEXT,
+    robots_meta TEXT,
+    http_status INTEGER,
+    redirect_chain TEXT,
     markdown_path TEXT,
     char_count INTEGER,
     status TEXT NOT NULL DEFAULT 'crawled',
@@ -64,7 +72,32 @@ const CREATE_TABLES_SQL = [
     user_intent_alignment_score REAL,
     trust_signals_score REAL,
     authority_score REAL,
+    confidence_score REAL,
     geo_recommendations TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending',
+    progress INTEGER DEFAULT 0,
+    message TEXT,
+    error TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS webhooks (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    secret TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
 ];
@@ -90,8 +123,21 @@ export async function getDb(): Promise<SQLJsDatabase<typeof schema>> {
 
   // Migrations — add columns if missing (idempotent)
   const MIGRATIONS = [
+    // v1 migrations
     `ALTER TABLE crawl_pages ADD COLUMN status TEXT NOT NULL DEFAULT 'crawled'`,
     `ALTER TABLE crawl_pages ADD COLUMN error_message TEXT`,
+    // v2 migrations — crawls
+    `ALTER TABLE crawls ADD COLUMN max_depth INTEGER`,
+    // v2 migrations — crawl_pages extended metadata
+    `ALTER TABLE crawl_pages ADD COLUMN canonical_url TEXT`,
+    `ALTER TABLE crawl_pages ADD COLUMN og_title TEXT`,
+    `ALTER TABLE crawl_pages ADD COLUMN og_description TEXT`,
+    `ALTER TABLE crawl_pages ADD COLUMN og_image TEXT`,
+    `ALTER TABLE crawl_pages ADD COLUMN robots_meta TEXT`,
+    `ALTER TABLE crawl_pages ADD COLUMN http_status INTEGER`,
+    `ALTER TABLE crawl_pages ADD COLUMN redirect_chain TEXT`,
+    // v2 migrations — page_analyses
+    `ALTER TABLE page_analyses ADD COLUMN confidence_score REAL`,
   ];
   for (const migration of MIGRATIONS) {
     try { _sqliteDb.run(migration); } catch { /* column already exists */ }

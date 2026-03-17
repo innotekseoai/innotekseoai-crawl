@@ -30,17 +30,19 @@ user_intent: <score>
 trust_signals: <score>
 authority: <score>
 summary: <one line summary for llms.txt>
-recommendation: <one specific improvement>
+rec1: [high|medium|low] <specific improvement>
+rec2: [high|medium|low] <specific improvement>
+rec3: [high|medium|low] <specific improvement>
 
 PAGE CONTENT:
-${input.markdown.slice(0, 1500)}`;
+${input.markdown}`;
 }
 
 /**
  * Parse the simple score format into a GeoPageAnalysis-compatible object.
  * Much more reliable than asking tiny models to produce JSON.
  */
-export function parseScoreResponse(raw: string, url: string, markdown: string): Record<string, unknown> | null {
+export function parseScoreResponse(raw: string, url: string, markdown: string, schemaType = 'WebPage'): Record<string, unknown> | null {
   const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
 
   function extractNumber(key: string): number | null {
@@ -81,7 +83,12 @@ export function parseScoreResponse(raw: string, url: string, markdown: string): 
   const trust_signals = extractNumber('trust[_ ]?signals?');
   const authority = extractNumber('authority');
   const summary = extractText('summary');
-  const recommendation = extractText('recommendation');
+  // Parse up to 3 recommendations with impact levels
+  const recommendations: string[] = [];
+  for (const key of ['rec1', 'rec2', 'rec3', 'recommendation']) {
+    const rec = extractText(key);
+    if (rec) recommendations.push(rec);
+  }
 
   // Need at least a few scores to consider it valid
   const scores = [entity_clarity, content_quality, semantic_structure, entity_richness,
@@ -94,9 +101,10 @@ export function parseScoreResponse(raw: string, url: string, markdown: string): 
   })();
 
   return {
+    _parsedScoreCount: validScores.length,
     json_ld: JSON.stringify({
       '@context': 'https://schema.org',
-      '@type': 'WebPage',
+      '@type': schemaType,
       name: markdown.split('\n')[0]?.replace(/^#\s*/, '').slice(0, 100) || 'Page',
       url,
     }),
@@ -114,7 +122,7 @@ export function parseScoreResponse(raw: string, url: string, markdown: string): 
     user_intent_alignment_score: user_intent ?? 5,
     trust_signals_score: trust_signals ?? 5,
     authority_score: authority ?? 5,
-    geo_recommendations: recommendation ? [recommendation] : [],
+    geo_recommendations: recommendations,
   };
 }
 

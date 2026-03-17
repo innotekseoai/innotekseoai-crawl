@@ -61,7 +61,7 @@ describe('crawlNative', () => {
 
     expect(result.success).toBe(true);
     expect(result.pages.length).toBe(1);
-    expect(result.pages[0].url).toBe('https://example.com');
+    expect(result.pages[0].url).toBe('https://example.com/');
     expect(result.pages[0].markdown).toBeTruthy();
     expect(result.pages[0].metadata?.title).toBe('Test Page');
   });
@@ -99,7 +99,7 @@ describe('crawlNative', () => {
     expect(onPage).toHaveBeenCalledTimes(1);
     expect(onPage).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: 'https://example.com',
+        url: 'https://example.com/',
         markdown: expect.any(String),
       }),
       0
@@ -153,7 +153,7 @@ describe('crawlNative', () => {
     expect(result.success).toBe(true);
     // Should have crawled both the homepage and /about
     const crawledUrls = result.pages.map((p) => p.url);
-    expect(crawledUrls).toContain('https://example.com');
+    expect(crawledUrls).toContain('https://example.com/');
     expect(crawledUrls).toContain('https://example.com/about');
   });
 

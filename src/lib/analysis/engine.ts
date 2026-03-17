@@ -4,6 +4,7 @@
  */
 
 import type { GeoPageAnalysis, GeoAnalysisResult, SiteMetrics } from '../../types/analysis.js';
+import { processRecommendations } from '../ai/recommendations.js';
 
 export function round(value: number, decimals = 2): number {
   const p = 10 ** decimals;
@@ -109,12 +110,15 @@ export function aggregateResults(
   const overallGrade = gradeFromMetrics(avgEntityClarity, avgWordsPerFact, schemaCompletenessScore);
 
   const allRecommendations = pageResults.flatMap((p) => p.result.geo_recommendations);
-  const uniqueRecommendations = [...new Set(allRecommendations)];
-  const priorityRecommendations = uniqueRecommendations.slice(0, 5);
-
-  const criticalIssues = uniqueRecommendations
-    .filter((r) => /missing|required|critical|must|invalid|add|include|consider|prioritize|ensure/i.test(r))
-    .slice(0, 5);
+  const processed = processRecommendations(allRecommendations);
+  const priorityRecommendations = processed.slice(0, 5).map((r) => {
+    const prefix = r.impact === 'high' ? '[HIGH] ' : r.impact === 'low' ? '[LOW] ' : '';
+    return `${prefix}${r.text}`;
+  });
+  const criticalIssues = processed
+    .filter((r) => r.impact === 'high' || /missing|required|critical|must|invalid/i.test(r.text))
+    .slice(0, 5)
+    .map((r) => r.text);
 
   const premiumScore = Math.round(
     (avg((r) => r.content_quality_score) +
@@ -134,7 +138,7 @@ export function aggregateResults(
     total_facts: totalFacts,
     avg_words_per_fact: avgWordsPerFact,
     overall_grade: overallGrade,
-    critical_issues: criticalIssues.length >= 2 ? criticalIssues : uniqueRecommendations.slice(0, 5),
+    critical_issues: criticalIssues.length >= 2 ? criticalIssues : processed.slice(0, 5).map((r) => r.text),
     priority_recommendations: priorityRecommendations,
     schema_completeness_score: schemaCompletenessScore,
     avg_content_quality: avg((r) => r.content_quality_score),

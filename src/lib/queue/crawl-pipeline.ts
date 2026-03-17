@@ -10,11 +10,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import pLimit from 'p-limit';
 import { eq } from 'drizzle-orm';
 import { getDb, saveDb } from '@/lib/db/client';
 import { crawls, crawlPages, pageAnalyses } from '@/lib/db/schema';
 import { crawlNative } from '@/lib/crawler/native-client';
 import { savePage, readPage } from '@/lib/storage/markdown-store';
+import { withRetry } from '@/lib/crawler/retry';
+import { dispatchWebhook } from '@/lib/webhooks/dispatcher';
+import { isInnotekseoaiConfigured, pushToInnotekseoai } from '@/lib/integrations/innotekseoai';
 import { taskManager } from './task-manager';
 
 interface PipelineOptions {
@@ -24,6 +28,8 @@ interface PipelineOptions {
   crawlerType: 'native' | 'browser';
   analyze: boolean;
   modelPath?: string;
+  maxDepth?: number;
+  signal?: AbortSignal;
 }
 
 let _logCounter = 0;
@@ -42,9 +48,10 @@ function emitLog(
 }
 
 export async function runPipeline(opts: PipelineOptions) {
-  const { crawlId, url, limit, analyze, modelPath } = opts;
+  const { crawlId, url, limit, analyze, modelPath, maxDepth } = opts;
 
   taskManager.create(crawlId);
+  const abortSignal = opts.signal ?? taskManager.getSignal(crawlId);
   taskManager.run(crawlId, async (update) => {
     const db = await getDb();
     const hostname = new URL(url).hostname;
@@ -70,6 +77,7 @@ export async function runPipeline(opts: PipelineOptions) {
     } else {
       emitLog(crawlId, 'info', `Starting crawl for ${hostname}`);
       update(5, 'Starting crawl...');
+      dispatchWebhook('crawl.started', crawlId, { url, limit });
     }
 
     const crawl = await db.select().from(crawls).where(eq(crawls.id, crawlId)).then((r) => r[0]);
@@ -85,6 +93,8 @@ export async function runPipeline(opts: PipelineOptions) {
 
       const result = await crawlNative(url, {
         limit,
+        maxDepth,
+        signal: abortSignal,
         onProgress: (event) => {
           const levelMap: Record<string, 'info' | 'success' | 'warn' | 'detail'> = {
             robots: 'detail',
@@ -107,6 +117,13 @@ export async function runPipeline(opts: PipelineOptions) {
             url: page.url,
             title: page.metadata?.title ?? null,
             description: page.metadata?.description ?? null,
+            canonicalUrl: page.metadata?.canonicalUrl ?? null,
+            ogTitle: page.metadata?.ogTitle ?? null,
+            ogDescription: page.metadata?.ogDescription ?? null,
+            ogImage: page.metadata?.ogImage ?? null,
+            robotsMeta: page.metadata?.robotsMeta ?? null,
+            httpStatus: page.metadata?.httpStatus ?? null,
+            redirectChain: page.metadata?.redirectChain ? JSON.stringify(page.metadata.redirectChain) : null,
             markdownPath,
             charCount: page.markdown.length,
             status: 'crawled',
@@ -165,7 +182,10 @@ export async function runPipeline(opts: PipelineOptions) {
     // --- Phase 2: Analysis ---
     if (!analyze || !modelPath) {
       emitLog(crawlId, 'info', 'Analysis skipped — no model selected');
-      return { crawlId, pages: existingPages.length };
+      // Re-query to get fresh count (existingPages is stale after crawl)
+      const freshPages = await db.select().from(crawlPages)
+        .where(eq(crawlPages.crawlId, crawlId));
+      return { crawlId, pages: freshPages.length };
     }
 
     await db.update(crawls)
@@ -259,18 +279,27 @@ export async function runPipeline(opts: PipelineOptions) {
       pendingAnalysis.push(...failedPages);
     }
 
-    emitLog(crawlId, 'info', `Analyzing ${pendingAnalysis.length} pages with local AI...`);
+    // Concurrent analysis when using GPU server, sequential for CPU
+    const concurrencyLimit = usingServer ? 3 : 1;
+    emitLog(crawlId, 'info', `Analyzing ${pendingAnalysis.length} pages with local AI (concurrency: ${concurrencyLimit})...`);
 
-    let analyzedSoFar = alreadyAnalyzed.length;
-    let failCount = 0;
+    // Shared counters — safe in Node.js single-threaded model between sync points,
+    // but we assign pageNum at the synchronous point before the first await to avoid
+    // stale reads when concurrent tasks interleave.
+    const counters = { analyzed: alreadyAnalyzed.length, failed: 0 };
     const startTime = Date.now();
 
-    for (let i = 0; i < pendingAnalysis.length; i++) {
-      const page = pendingAnalysis[i];
-
+    // Extract per-page analysis into reusable function
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function analyzeSinglePage(page: any) {
+      if (abortSignal?.aborted) return; // Check cancellation
       const idxMatch = page.markdownPath?.match(/(\d+)\.md$/);
       const pageIndex = idxMatch ? parseInt(idxMatch[1], 10) : 0;
       const pageMarkdown = readPage(crawlId, pageIndex);
+
+      const pagePath = (() => {
+        try { return new URL(page.url).pathname; } catch { return page.url; }
+      })();
 
       if (!pageMarkdown?.trim()) {
         emitLog(crawlId, 'warn', `Skipping ${page.url} — empty content`);
@@ -278,28 +307,38 @@ export async function runPipeline(opts: PipelineOptions) {
           .set({ status: 'failed', errorMessage: 'Empty markdown' })
           .where(eq(crawlPages.id, page.id));
         saveDb();
-        failCount++;
-        continue;
+        counters.failed++;
+        return;
       }
 
-      const pagePath = (() => {
-        try { return new URL(page.url).pathname; } catch { return page.url; }
-      })();
-
-      const pageNum = analyzedSoFar + 1;
+      // Assign page number synchronously before any await to avoid stale reads
+      const pageNum = ++counters.analyzed;
       const pageStart = Date.now();
       emitLog(crawlId, 'detail', `[${pageNum}/${allPages.length}] Analyzing ${pagePath} (${(pageMarkdown.length / 1000).toFixed(1)}k chars)...`);
 
       try {
-        const analysis = await analyzePageForGeo({
-          url: page.url,
-          markdown: pageMarkdown,
-          baseUrl: url,
-          modelPath,
-          onProgress: (msg: string) => {
-            emitLog(crawlId, 'detail', `  ${pagePath}: ${msg}`);
-          },
-        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const analysis: any = await withRetry(
+          () => analyzePageForGeo({
+            url: page.url,
+            markdown: pageMarkdown,
+            baseUrl: url,
+            modelPath,
+            onProgress: (msg: string) => {
+              emitLog(crawlId, 'detail', `  ${pagePath}: ${msg}`);
+            },
+          }),
+          {
+            maxRetries: 2,
+            baseDelay: 1000,
+            onRetry: (attempt, err) => {
+              emitLog(crawlId, 'warn', `Retry ${attempt} for ${pagePath}: ${err.message}`);
+            },
+          }
+        );
+
+        // Check cancellation after inference (before DB writes)
+        if (abortSignal?.aborted) return;
 
         await db.insert(pageAnalyses).values({
           id: randomUUID(),
@@ -321,6 +360,7 @@ export async function runPipeline(opts: PipelineOptions) {
           trustSignalsScore: analysis.trust_signals_score,
           authorityScore: analysis.authority_score,
           geoRecommendations: JSON.stringify(analysis.geo_recommendations),
+          confidenceScore: analysis.confidence_score ?? null,
           createdAt: new Date().toISOString(),
         });
 
@@ -329,18 +369,18 @@ export async function runPipeline(opts: PipelineOptions) {
           .where(eq(crawlPages.id, page.id));
         saveDb();
 
-        analyzedSoFar++;
+        // pageNum already incremented counters.analyzed synchronously above
 
-        // Show key metrics inline
         const avgScore = (
           (analysis.content_quality_score + analysis.semantic_structure_score +
            analysis.entity_richness_score + analysis.citation_readiness_score +
            analysis.technical_seo_score + analysis.trust_signals_score +
            analysis.authority_score + analysis.entity_clarity_score) / 8
         ).toFixed(1);
+        const conf = analysis.confidence_score !== undefined ? ` · conf: ${(analysis.confidence_score * 100).toFixed(0)}%` : '';
         const pageDuration = ((Date.now() - pageStart) / 1000).toFixed(1);
         emitLog(crawlId, 'success',
-          `${pagePath} — clarity: ${analysis.entity_clarity_score}/10 · facts: ${analysis.fact_density_count} · avg: ${avgScore}/10 · ${pageDuration}s`
+          `${pagePath} — clarity: ${analysis.entity_clarity_score}/10 · facts: ${analysis.fact_density_count} · avg: ${avgScore}/10${conf} · ${pageDuration}s`
         );
         if (analysis.geo_recommendations.length > 0) {
           emitLog(crawlId, 'detail', `  └ ${analysis.geo_recommendations[0]}`);
@@ -351,66 +391,30 @@ export async function runPipeline(opts: PipelineOptions) {
           url: page.url,
           entityClarityScore: analysis.entity_clarity_score,
         });
+        dispatchWebhook('page.analyzed', crawlId, { url: page.url, avgScore: parseFloat(avgScore) });
 
         update(
-          92 + Math.round((analyzedSoFar / allPages.length) * 7),
+          92 + Math.round((counters.analyzed / allPages.length) * 7),
           `Analyzing: ${page.url}`
         );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        emitLog(crawlId, 'warn', `Failed ${pagePath}: ${errMsg} — retrying...`);
-
-        try {
-          const analysis = await analyzePageForGeo({
-            url: page.url,
-            markdown: pageMarkdown,
-            baseUrl: url,
-            modelPath,
-            onProgress: (msg: string) => {
-              emitLog(crawlId, 'detail', `  ${pagePath} (retry): ${msg}`);
-            },
-          });
-
-          await db.insert(pageAnalyses).values({
-            id: randomUUID(),
-            crawlId,
-            crawlPageId: page.id,
-            url: page.url,
-            jsonLd: analysis.json_ld,
-            mirrorMarkdown: analysis.mirror_markdown ?? null,
-            llmsTxtEntry: analysis.llms_txt_entry,
-            entityClarityScore: analysis.entity_clarity_score,
-            factDensityCount: analysis.fact_density_count,
-            wordCount: analysis.word_count,
-            contentQualityScore: analysis.content_quality_score,
-            semanticStructureScore: analysis.semantic_structure_score,
-            entityRichnessScore: analysis.entity_richness_score,
-            citationReadinessScore: analysis.citation_readiness_score,
-            technicalSeoScore: analysis.technical_seo_score,
-            userIntentAlignmentScore: analysis.user_intent_alignment_score,
-            trustSignalsScore: analysis.trust_signals_score,
-            authorityScore: analysis.authority_score,
-            geoRecommendations: JSON.stringify(analysis.geo_recommendations),
-            createdAt: new Date().toISOString(),
-          });
-
-          await db.update(crawlPages)
-            .set({ status: 'analyzed' })
-            .where(eq(crawlPages.id, page.id));
-          saveDb();
-          analyzedSoFar++;
-          emitLog(crawlId, 'success', `Retry succeeded for ${pagePath}`);
-        } catch (retryErr) {
-          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          await db.update(crawlPages)
-            .set({ status: 'failed', errorMessage: retryMsg })
-            .where(eq(crawlPages.id, page.id));
-          saveDb();
-          failCount++;
-          emitLog(crawlId, 'error', `${pagePath} failed after retry: ${retryMsg}`);
-        }
+        await db.update(crawlPages)
+          .set({ status: 'failed', errorMessage: errMsg })
+          .where(eq(crawlPages.id, page.id));
+        saveDb();
+        counters.failed++;
+        emitLog(crawlId, 'error', `${pagePath} failed after retries: ${errMsg}`);
       }
     }
+
+    // Run with concurrency limiter
+    const analysisLimiter = pLimit(concurrencyLimit);
+    await Promise.all(
+      pendingAnalysis.map((page) =>
+        analysisLimiter(() => analyzeSinglePage(page))
+      )
+    );
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     if (usingServer) {
@@ -456,11 +460,25 @@ export async function runPipeline(opts: PipelineOptions) {
       emitLog(crawlId, 'detail', `Generated JSON-LD schema (${aggregate.primary_json_ld.length} chars)`);
       emitLog(crawlId, 'detail', `Generated llms.txt (${aggregate.llms_txt.split('\n').length} lines)`);
 
-      if (failCount > 0) {
-        emitLog(crawlId, 'warn', `${failCount} page${failCount !== 1 ? 's' : ''} failed analysis — use Resume to retry`);
+      if (counters.failed > 0) {
+        emitLog(crawlId, 'warn', `${counters.failed} page${counters.failed !== 1 ? 's' : ''} failed analysis — use Resume to retry`);
       }
 
       emitLog(crawlId, 'success', `Pipeline complete in ${elapsed}s — ${allAnalyses.length} pages analyzed`);
+      dispatchWebhook('crawl.completed', crawlId, {
+        grade: aggregate.site_metrics.overall_grade,
+        premiumScore: aggregate.site_metrics.premium_score,
+        pagesAnalyzed: allAnalyses.length,
+      });
+
+      // Optional: push results to innotekseoai
+      if (isInnotekseoaiConfigured()) {
+        emitLog(crawlId, 'info', 'Pushing results to innotekseoai...');
+        const pushed = await pushToInnotekseoai(url, aggregate);
+        emitLog(crawlId, pushed ? 'success' : 'warn',
+          pushed ? 'Results pushed to innotekseoai' : 'Failed to push to innotekseoai'
+        );
+      }
 
       await db.update(crawls)
         .set({
@@ -491,6 +509,7 @@ export async function runPipeline(opts: PipelineOptions) {
     const errStack = err instanceof Error ? err.stack : '';
     console.error(`[pipeline] FATAL for crawl ${opts.crawlId}:`, errMsg, errStack);
     emitLog(opts.crawlId, 'error', `Pipeline crashed: ${errMsg}`);
+    dispatchWebhook('crawl.failed', opts.crawlId, { error: errMsg });
     getDb().then(async (db) => {
       await db.update(crawls)
         .set({

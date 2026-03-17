@@ -7,7 +7,7 @@ import { desc } from 'drizzle-orm';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { url, limit = 50, crawlerType = 'native', analyze = false, modelPath } = body;
+    const { url, limit = 50, crawlerType = 'native', analyze = false, modelPath, maxDepth } = body;
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json({ error: 'URL is required' }, { status: 400 });
@@ -24,7 +24,9 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString();
 
     // Store analysis config so /start can read it without relying on URL params
-    const config = analyze && modelPath ? JSON.stringify({ analyze, modelPath }) : null;
+    const config = analyze && modelPath
+      ? JSON.stringify({ analyze, modelPath, maxDepth: maxDepth ?? null })
+      : (maxDepth !== undefined ? JSON.stringify({ maxDepth }) : null);
 
     await db.insert(crawls).values({
       id: crawlId,

@@ -18,6 +18,7 @@ export function CrawlForm() {
   const router = useRouter();
   const [url, setUrl] = useState('');
   const [limit, setLimit] = useState(50);
+  const [maxDepth, setMaxDepth] = useState<number | undefined>(undefined);
   const [crawlerType, setCrawlerType] = useState<'native' | 'browser'>('native');
   const [analyze, setAnalyze] = useState(true);
   const [models, setModels] = useState<Model[]>([]);
@@ -65,6 +66,7 @@ export function CrawlForm() {
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = { url: finalUrl, limit, crawlerType };
+      if (maxDepth !== undefined) payload.maxDepth = maxDepth;
       if (analyze && selectedModel) {
         payload.analyze = true;
         payload.modelPath = selectedModel;
@@ -130,6 +132,27 @@ export function CrawlForm() {
           <div className="flex justify-between text-xs text-muted">
             <span>1</span>
             <span>200</span>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="block text-sm font-medium text-muted">
+            Max Depth: {maxDepth === undefined ? 'Unlimited' : maxDepth}
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={10}
+            value={maxDepth ?? 10}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setMaxDepth(v >= 10 ? undefined : v);
+            }}
+            className="w-full accent-accent"
+          />
+          <div className="flex justify-between text-xs text-muted">
+            <span>0 (seed only)</span>
+            <span>Unlimited</span>
           </div>
         </div>
 

@@ -2,13 +2,23 @@
  * Crawler types — compatible with innotekseoai's NativeCrawlResult
  */
 
+export interface CrawlPageMetadata {
+  title?: string;
+  description?: string;
+  canonicalUrl?: string;
+  ogTitle?: string;
+  ogDescription?: string;
+  ogImage?: string;
+  robotsMeta?: string;
+  httpStatus?: number;
+  redirectChain?: string[];
+  viewport?: string;
+}
+
 export interface CrawlPage {
   url: string;
   markdown: string;
-  metadata?: {
-    title?: string;
-    description?: string;
-  };
+  metadata?: CrawlPageMetadata;
 }
 
 export interface CrawlResult {
@@ -32,8 +42,12 @@ export interface CrawlOptions {
   getBrowser?: () => Promise<PlaywrightBrowserLike>;
   /** Maximum pages to crawl */
   limit?: number;
+  /** Maximum link depth from seed URL (0 = seed only, undefined = unlimited) */
+  maxDepth?: number;
   /** Concurrency for native client */
   concurrency?: number;
+  /** AbortSignal for cancellation */
+  signal?: AbortSignal;
 }
 
 export interface CrawlProgressEvent {

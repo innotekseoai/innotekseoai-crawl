@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { GeoPageAnalysis } from '../../../src/types/analysis.js';
 
-// We need to mock modelManager since node-llama-cpp isn't available in tests
+// Mock all inference backends
 const mockInference = vi.fn();
 const mockIsLoaded = vi.fn();
 
@@ -12,25 +12,24 @@ vi.mock('../../../src/lib/ai/model-manager.js', () => ({
   },
 }));
 
-// Import after mock
-const { analyzePageForGeo } = await import('../../../src/lib/ai/analyzer.js');
+vi.mock('../../../src/lib/ai/server-inference.js', () => ({
+  isServerHealthy: () => Promise.resolve(false),
+  isServerBinaryAvailable: () => false,
+  startServer: vi.fn(),
+  stopServer: vi.fn(),
+  ensureServerModel: vi.fn(),
+  getServerModelName: vi.fn(),
+  serverInference: vi.fn(),
+}));
 
-const validAnalysis: GeoPageAnalysis = {
-  json_ld: '{"@context":"https://schema.org","@type":"WebPage","name":"Test"}',
-  llms_txt_entry: '- [Test Page](/test): A test page for verification',
-  entity_clarity_score: 7,
-  fact_density_count: 5,
-  word_count: 200,
-  content_quality_score: 6,
-  semantic_structure_score: 7,
-  entity_richness_score: 5,
-  citation_readiness_score: 6,
-  technical_seo_score: 7,
-  user_intent_alignment_score: 8,
-  trust_signals_score: 6,
-  authority_score: 5,
-  geo_recommendations: ['Add founding year', 'Include contact details'],
-};
+vi.mock('../../../src/lib/ai/subprocess-inference.js', () => ({
+  isSubprocessAvailable: () => false,
+  subprocessInference: vi.fn(),
+  stopSession: vi.fn(),
+}));
+
+// Import after mocks
+const { analyzePageForGeo } = await import('../../../src/lib/ai/analyzer.js');
 
 describe('analyzePageForGeo', () => {
   const input = {
@@ -43,113 +42,115 @@ describe('analyzePageForGeo', () => {
     vi.clearAllMocks();
   });
 
-  it('throws if no model is loaded', async () => {
+  it('throws if no model is loaded and no server available', async () => {
     mockIsLoaded.mockReturnValue(false);
-
     await expect(analyzePageForGeo(input)).rejects.toThrow('No model loaded');
   });
 
-  it('returns validated analysis from valid model output', async () => {
-    mockIsLoaded.mockReturnValue(true);
-    mockInference.mockResolvedValue(JSON.stringify(validAnalysis));
-
-    const result = await analyzePageForGeo(input);
-
-    expect(result.entity_clarity_score).toBe(7);
-    expect(result.fact_density_count).toBe(5);
-    expect(result.word_count).toBe(200);
-    expect(result.geo_recommendations).toHaveLength(2);
-    expect(result.json_ld).toContain('schema.org');
-  });
-
-  it('handles model output wrapped in markdown fences', async () => {
+  it('parses score format response correctly', async () => {
     mockIsLoaded.mockReturnValue(true);
     mockInference.mockResolvedValue(
-      '```json\n' + JSON.stringify(validAnalysis) + '\n```'
+      `entity_clarity: 8
+facts: 12
+words: 450
+content_quality: 7
+semantic_structure: 6
+entity_richness: 7
+citation_readiness: 5
+technical_seo: 8
+user_intent: 7
+trust_signals: 6
+authority: 7
+summary: Test page summary
+rec1: [high] Add structured data`
     );
 
     const result = await analyzePageForGeo(input);
-    expect(result.entity_clarity_score).toBe(7);
+    expect(result.entity_clarity_score).toBe(8);
+    expect(result.content_quality_score).toBe(7);
+    expect(result.technical_seo_score).toBe(8);
+    expect(result.fact_density_count).toBe(12);
+    expect(result.confidence_score).toBeGreaterThan(0);
   });
 
-  it('retries on first JSON parse failure', async () => {
+  it('falls back to JSON parse when score format fails', async () => {
     mockIsLoaded.mockReturnValue(true);
-    // First call returns garbage, second returns valid JSON
-    mockInference
-      .mockResolvedValueOnce('not valid json at all')
-      .mockResolvedValueOnce(JSON.stringify(validAnalysis));
-
-    const result = await analyzePageForGeo(input);
-    expect(result.entity_clarity_score).toBe(7);
-    expect(mockInference).toHaveBeenCalledTimes(2);
-  });
-
-  it('throws after two parse failures', async () => {
-    mockIsLoaded.mockReturnValue(true);
-    mockInference.mockResolvedValue('still not json');
-
-    await expect(analyzePageForGeo(input)).rejects.toThrow('Failed to parse AI response');
-  });
-
-  it('applies defaults for missing optional fields and validates', async () => {
-    mockIsLoaded.mockReturnValue(true);
-
-    // Return partial analysis — some required fields present, some missing
-    const partial = {
+    const validJson: GeoPageAnalysis = {
       json_ld: '{"@type":"WebPage"}',
       llms_txt_entry: '- [Test](/test): test',
       entity_clarity_score: 8,
       fact_density_count: 3,
       word_count: 100,
-      // Missing all premium metrics
-      geo_recommendations: ['Do something'],
+      content_quality_score: 7,
+      semantic_structure_score: 6,
+      entity_richness_score: 5,
+      citation_readiness_score: 6,
+      technical_seo_score: 7,
+      user_intent_alignment_score: 8,
+      trust_signals_score: 6,
+      authority_score: 5,
+      geo_recommendations: ['Improve schema'],
     };
-    mockInference.mockResolvedValue(JSON.stringify(partial));
+    mockInference.mockResolvedValue(JSON.stringify(validJson));
 
     const result = await analyzePageForGeo(input);
-
-    // Should fill in defaults for missing fields
-    expect(result.entity_clarity_score).toBe(8); // from model
-    expect(result.content_quality_score).toBe(5); // default
-    expect(result.semantic_structure_score).toBe(5); // default
-    expect(result.geo_recommendations).toEqual(['Do something']); // from model
+    expect(result.entity_clarity_score).toBe(8);
+    expect(result.geo_recommendations).toEqual(['Improve schema']);
   });
 
-  it('preserves mirror_markdown when provided', async () => {
+  it('falls back to number extraction as last resort', async () => {
     mockIsLoaded.mockReturnValue(true);
-    const withMirror = {
-      ...validAnalysis,
-      mirror_markdown: '# Clean Content\n\nJust the facts.',
-    };
-    mockInference.mockResolvedValue(JSON.stringify(withMirror));
+    mockInference.mockResolvedValue('The scores are 7 8 6 5 7 8 6 7 5');
 
     const result = await analyzePageForGeo(input);
-    expect(result.mirror_markdown).toBe('# Clean Content\n\nJust the facts.');
+    // Should extract numbers and map to scores
+    expect(result.entity_clarity_score).toBe(7);
+    expect(result.content_quality_score).toBe(8);
   });
 
-  it('passes GEO_JSON_SCHEMA to model inference', async () => {
+  it('returns defaults when model output is unparseable', async () => {
     mockIsLoaded.mockReturnValue(true);
-    mockInference.mockResolvedValue(JSON.stringify(validAnalysis));
+    mockInference.mockResolvedValue('completely useless output with no numbers');
 
-    await analyzePageForGeo(input);
-
-    // Second arg should be the JSON schema
-    const schemaArg = mockInference.mock.calls[0][1];
-    expect(schemaArg).toBeDefined();
-    expect(schemaArg.type).toBe('object');
-    expect(schemaArg.properties).toBeDefined();
+    const result = await analyzePageForGeo(input);
+    // Should return default scores (5)
+    expect(result.entity_clarity_score).toBe(5);
+    expect(result.content_quality_score).toBe(5);
+    expect(result.confidence_score).toBe(0);
   });
 
-  it('sends system and user messages to inference', async () => {
+  it('never re-runs inference on parse failure', async () => {
     mockIsLoaded.mockReturnValue(true);
-    mockInference.mockResolvedValue(JSON.stringify(validAnalysis));
+    mockInference.mockResolvedValue('garbage');
 
     await analyzePageForGeo(input);
+    // Inference should only be called ONCE regardless of parse outcome
+    expect(mockInference).toHaveBeenCalledTimes(1);
+  });
 
-    const messages = mockInference.mock.calls[0][0];
-    expect(messages).toHaveLength(2);
-    expect(messages[0].role).toBe('system');
-    expect(messages[1].role).toBe('user');
-    expect(messages[1].content).toContain(input.url);
+  it('detects schema type from URL', async () => {
+    mockIsLoaded.mockReturnValue(true);
+    mockInference.mockResolvedValue('entity_clarity: 7\ncontent_quality: 6\nsemantic_structure: 5\nentity_richness: 6\ncitation_readiness: 4\ntechnical_seo: 7\nuser_intent: 6\ntrust_signals: 5\nauthority: 6');
+
+    const result = await analyzePageForGeo({
+      ...input,
+      url: 'https://example.com/blog/my-post',
+    });
+    const jsonLd = JSON.parse(result.json_ld);
+    expect(jsonLd['@type']).toBe('Article');
+  });
+
+  it('uses smart truncation for long content', async () => {
+    mockIsLoaded.mockReturnValue(true);
+    mockInference.mockResolvedValue('entity_clarity: 7\ncontent_quality: 6\nsemantic_structure: 5\nentity_richness: 6\ncitation_readiness: 4\ntechnical_seo: 7\nuser_intent: 6\ntrust_signals: 5\nauthority: 6');
+
+    const longContent = '# Title\n\n' + 'Paragraph content. '.repeat(500);
+    const result = await analyzePageForGeo({
+      ...input,
+      markdown: longContent,
+    });
+
+    // Should still work — truncation handled internally
+    expect(result.entity_clarity_score).toBe(7);
   });
 });

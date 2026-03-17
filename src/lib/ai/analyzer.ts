@@ -13,6 +13,8 @@ import { modelManager } from './model-manager.js';
 import type { ProgressCallback } from './model-manager.js';
 import { SYSTEM_PROMPT, buildGeoAnalysisPrompt, parseScoreResponse } from './prompts.js';
 import { safeJsonParse } from './json-repair.js';
+import { smartTruncate } from './truncate.js';
+import { detectSchemaType } from './schema-detect.js';
 import { GeoPageAnalysisSchema, type GeoPageAnalysis } from '../../types/analysis.js';
 import { isSubprocessAvailable, subprocessInference, stopSession } from './subprocess-inference.js';
 import { isServerHealthy, serverInference } from './server-inference.js';
@@ -92,10 +94,8 @@ export async function analyzePageForGeo(input: {
 }): Promise<GeoPageAnalysis> {
   const { onProgress } = input;
 
-  const MAX_CHARS = 1500;
-  const truncatedMarkdown = input.markdown.length > MAX_CHARS
-    ? input.markdown.slice(0, MAX_CHARS) + '\n[truncated]'
-    : input.markdown;
+  const truncatedMarkdown = smartTruncate(input.markdown, 2000);
+  const detectedType = detectSchemaType({ url: input.url, markdown: input.markdown });
 
   const prompt = buildGeoAnalysisPrompt({ ...input, markdown: truncatedMarkdown });
 
@@ -106,17 +106,24 @@ export async function analyzePageForGeo(input: {
 
   // Step 2: Parse — try multiple strategies, never re-run inference
   let parsed: Record<string, unknown> | null = null;
+  let parsedScoreCount = 0;
 
   // Strategy 1: Score format (key: value lines)
-  parsed = parseScoreResponse(raw, input.url, truncatedMarkdown);
+  parsed = parseScoreResponse(raw, input.url, truncatedMarkdown, detectedType);
   if (parsed) {
     onProgress?.('Parsed scores successfully');
+    // Use the actual count of parsed scores from the parser (not confused by default 5s)
+    parsedScoreCount = (parsed._parsedScoreCount as number) ?? 0;
+    delete parsed._parsedScoreCount;
   }
 
   // Strategy 2: JSON parse
   if (!parsed) {
     onProgress?.('Trying JSON parse...');
     parsed = safeJsonParse(raw) as Record<string, unknown> | null;
+    if (parsed) {
+      parsedScoreCount = SCORE_FIELDS.filter(f => typeof parsed![f] === 'number').length;
+    }
   }
 
   // Strategy 3: Extract any numbers from the response as fallback scores
@@ -124,7 +131,6 @@ export async function analyzePageForGeo(input: {
     onProgress?.('Extracting any scores from response...');
     const numbers = raw.match(/\b(\d{1,2})\b/g)?.map(Number).filter(n => n >= 1 && n <= 10) ?? [];
     if (numbers.length >= 3) {
-      // Use whatever numbers we found, map to scores in order
       const fields = [
         'entity_clarity_score', 'content_quality_score', 'semantic_structure_score',
         'entity_richness_score', 'citation_readiness_score', 'technical_seo_score',
@@ -134,8 +140,12 @@ export async function analyzePageForGeo(input: {
       for (let i = 0; i < fields.length && i < numbers.length; i++) {
         parsed[fields[i]] = numbers[i];
       }
+      parsedScoreCount = Math.min(numbers.length, fields.length);
     }
   }
+
+  // Confidence = proportion of scores actually parsed from model output (0.0-1.0)
+  const confidence = Math.round((parsedScoreCount / SCORE_FIELDS.length) * 100) / 100;
 
   // Step 3: Build final result with defaults for any missing fields
   const path = (() => {
@@ -145,7 +155,7 @@ export async function analyzePageForGeo(input: {
   const defaults: Record<string, unknown> = {
     json_ld: JSON.stringify({
       '@context': 'https://schema.org',
-      '@type': 'WebPage',
+      '@type': detectedType,
       name: truncatedMarkdown.split('\n')[0]?.replace(/^#\s*/, '').slice(0, 80) || 'Page',
       url: input.url,
     }),
@@ -162,10 +172,11 @@ export async function analyzePageForGeo(input: {
     trust_signals_score: 5,
     authority_score: 5,
     geo_recommendations: [],
+    confidence_score: confidence,
   };
 
   // Merge: defaults ← parsed scores (overrides defaults where present)
-  const merged = { ...defaults, ...(parsed ?? {}) };
+  const merged = { ...defaults, ...(parsed ?? {}), confidence_score: confidence };
   const clamped = clampScores(merged);
 
   const validated = GeoPageAnalysisSchema.safeParse(clamped);
