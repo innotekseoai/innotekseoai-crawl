@@ -24,6 +24,8 @@ export function CrawlForm() {
   const [models, setModels] = useState<Model[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [serverModel, setServerModel] = useState<string | null>(null);
+  const [repeat, setRepeat] = useState(false);
+  const [frequency, setFrequency] = useState('weekly');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -82,6 +84,26 @@ export function CrawlForm() {
       if (!res.ok) {
         setError(data.error || 'Failed to start crawl');
         return;
+      }
+
+      // Create schedule if repeat is enabled
+      if (repeat) {
+        const schedConfig: Record<string, unknown> = {};
+        if (analyze && selectedModel) {
+          schedConfig.analyze = true;
+          schedConfig.modelPath = selectedModel;
+        }
+        if (maxDepth !== undefined) schedConfig.maxDepth = maxDepth;
+
+        await fetch('/api/schedules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseUrl: finalUrl,
+            frequency,
+            config: Object.keys(schedConfig).length > 0 ? schedConfig : undefined,
+          }),
+        });
       }
 
       router.push(`/crawl/${data.id}?autostart=1`);
@@ -227,6 +249,41 @@ export function CrawlForm() {
             <p className="text-xs text-muted/60">
               No models found. Place .gguf files in data/models/ to enable analysis.
             </p>
+          )}
+        </div>
+
+        {/* Repeat / Schedule */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setRepeat(!repeat)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${
+                repeat ? 'bg-accent' : 'bg-border'
+              } cursor-pointer`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  repeat ? 'translate-x-4' : ''
+                }`}
+              />
+            </button>
+            <label className="text-sm font-medium text-muted">
+              Repeat crawl on schedule
+            </label>
+          </div>
+
+          {repeat && (
+            <select
+              value={frequency}
+              onChange={(e) => setFrequency(e.target.value)}
+              className="w-full bg-surface2 border border-border rounded-lg px-3 py-2 text-sm text-text
+                focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/30 transition-colors"
+            >
+              <option value="daily">Daily (3:00 AM)</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
           )}
         </div>
 

@@ -105,7 +105,21 @@ export function aggregateResults(
       return u.pathname === '/' || u.href.replace(/\/$/, '') === baseUrl.replace(/\/$/, '');
     } catch { return false; }
   });
-  const primaryJsonLd = (homepagePage ?? pageResults[0]).result.json_ld;
+
+  // Use the homepage's JSON-LD, enhanced to Organization type for the primary schema
+  let primaryJsonLd = (homepagePage ?? pageResults[0]).result.json_ld;
+  try {
+    const parsed = JSON.parse(primaryJsonLd);
+    // Upgrade homepage WebSite to include Organization info if not already Organization
+    if (parsed['@type'] === 'WebSite' || parsed['@type'] === 'WebPage') {
+      const hostname = new URL(baseUrl).hostname;
+      parsed['@type'] = 'Organization';
+      if (!parsed.name || parsed.name === 'Page') {
+        parsed.name = hostname.replace('www.', '');
+      }
+      primaryJsonLd = JSON.stringify(parsed);
+    }
+  } catch { /* keep as-is */ }
   const schemaCompletenessScore = computeSchemaCompleteness(primaryJsonLd);
   const overallGrade = gradeFromMetrics(avgEntityClarity, avgWordsPerFact, schemaCompletenessScore);
 

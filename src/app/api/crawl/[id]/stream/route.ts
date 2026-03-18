@@ -1,5 +1,6 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { taskManager } from '@/lib/queue/task-manager';
+import { authenticateRequest } from '@/lib/auth/api-key';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +14,11 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // Auth check for SSE (can't use withAuth since we return a raw Response)
+  const authenticated = await authenticateRequest(_request);
+  if (!authenticated) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const { id } = await params;
 
   const encoder = new TextEncoder();

@@ -3,8 +3,9 @@ import { getDb, saveDb } from '@/lib/db/client';
 import { crawls } from '@/lib/db/schema';
 import { taskManager } from '@/lib/queue/task-manager';
 import { eq } from 'drizzle-orm';
+import { withAuth } from '@/lib/auth/with-auth';
 
-export async function POST(
+export const POST = withAuth(async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -36,4 +37,4 @@ export async function POST(
       { status: 500 }
     );
   }
-}
+});

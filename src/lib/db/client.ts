@@ -31,6 +31,7 @@ const CREATE_TABLES_SQL = [
     overall_grade TEXT,
     premium_score INTEGER,
     site_metrics TEXT,
+    config TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -74,6 +75,7 @@ const CREATE_TABLES_SQL = [
     authority_score REAL,
     confidence_score REAL,
     geo_recommendations TEXT,
+    score_explanations TEXT,
     created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS tasks (
@@ -138,10 +140,45 @@ export async function getDb(): Promise<SQLJsDatabase<typeof schema>> {
     `ALTER TABLE crawl_pages ADD COLUMN redirect_chain TEXT`,
     // v2 migrations — page_analyses
     `ALTER TABLE page_analyses ADD COLUMN confidence_score REAL`,
+    // v3 migrations — config column split
+    `ALTER TABLE crawls ADD COLUMN config TEXT`,
+    // v3 migrations — score explanations
+    `ALTER TABLE page_analyses ADD COLUMN score_explanations TEXT`,
+    // v3 migrations — schedules table (created separately below)
   ];
   for (const migration of MIGRATIONS) {
     try { _sqliteDb.run(migration); } catch { /* column already exists */ }
   }
+
+  // v3 — schedules table
+  _sqliteDb.run(`CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    base_url TEXT NOT NULL,
+    config TEXT,
+    frequency TEXT NOT NULL DEFAULT 'weekly',
+    next_run_at TEXT NOT NULL,
+    last_run_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  )`);
+
+  // v3 — migrate config blobs from siteMetrics to config for incomplete crawls
+  try {
+    const rows = _sqliteDb.exec(
+      `SELECT id, site_metrics FROM crawls WHERE config IS NULL AND site_metrics IS NOT NULL AND status IN ('pending','crawling')`
+    );
+    if (rows.length > 0 && rows[0].values) {
+      for (const row of rows[0].values) {
+        const [crawlId, sm] = row as [string, string];
+        try {
+          const parsed = JSON.parse(sm);
+          if (parsed.modelPath || parsed.analyze || parsed.maxDepth !== undefined) {
+            _sqliteDb.run(`UPDATE crawls SET config = ?, site_metrics = NULL WHERE id = ?`, [sm, crawlId]);
+          }
+        } catch { /* not valid JSON config */ }
+      }
+    }
+  } catch { /* migration already done or table empty */ }
 
   _db = drizzle(_sqliteDb, { schema });
 

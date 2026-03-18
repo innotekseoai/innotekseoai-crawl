@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db/client';
+import { getDb, saveDb } from '@/lib/db/client';
 import { crawls, crawlPages, pageAnalyses } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { withAuth } from '@/lib/auth/with-auth';
 
-export async function GET(
+export const GET = withAuth(async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -23,21 +24,16 @@ export async function GET(
     let modelUsed: string | null = null;
     if (crawl.siteMetrics) {
       try {
-        const parsed = JSON.parse(crawl.siteMetrics);
-        // siteMetrics can be either config {analyze, modelPath} or aggregate results
-        if (parsed.modelPath) {
-          // Config phase — extract model name
-          modelUsed = parsed.modelPath.split('/').pop() ?? null;
-        }
-        if (parsed.overall_grade || parsed.avg_entity_clarity) {
-          // Aggregate results phase
-          siteMetrics = parsed;
-          // Model name may have been stored during analysis
-          modelUsed = parsed.model_used ?? modelUsed;
-        }
-      } catch {
-        // siteMetrics not valid JSON yet — ignore
-      }
+        siteMetrics = JSON.parse(crawl.siteMetrics);
+        modelUsed = siteMetrics?.model_used ?? null;
+      } catch { /* not valid JSON — ignore */ }
+    }
+    // Fall back to config for model name if not yet in siteMetrics
+    if (!modelUsed && crawl.config) {
+      try {
+        const cfg = JSON.parse(crawl.config);
+        modelUsed = cfg.modelPath?.split('/').pop() ?? null;
+      } catch { /* ignore */ }
     }
 
     return NextResponse.json({
@@ -51,4 +47,29 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+});
+
+export const DELETE = withAuth(async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  try {
+    const db = await getDb();
+    const [crawl] = await db.select().from(crawls).where(eq(crawls.id, id));
+    if (!crawl) {
+      return NextResponse.json({ error: 'Crawl not found' }, { status: 404 });
+    }
+
+    const { deleteCrawlData } = await import('@/lib/db/delete-helpers');
+    await deleteCrawlData(db, id);
+    saveDb();
+
+    return NextResponse.json({ deleted: true });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    );
+  }
+});

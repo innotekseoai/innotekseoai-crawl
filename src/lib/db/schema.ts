@@ -22,7 +22,8 @@ export const crawls = sqliteTable('crawls', {
   llmsTxt: text('llms_txt'),
   overallGrade: text('overall_grade', { enum: ['A', 'B', 'C', 'D', 'F'] }),
   premiumScore: integer('premium_score'),
-  siteMetrics: text('site_metrics'), // JSON blob
+  siteMetrics: text('site_metrics'), // JSON blob — aggregate analysis results only
+  config: text('config'), // JSON blob — startup config (analyze, modelPath, maxDepth)
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
@@ -70,6 +71,7 @@ export const pageAnalyses = sqliteTable('page_analyses', {
   authorityScore: real('authority_score'),
   confidenceScore: real('confidence_score'),
   geoRecommendations: text('geo_recommendations'), // JSON array
+  scoreExplanations: text('score_explanations'), // JSON — reasons for low scores
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
@@ -97,5 +99,16 @@ export const apiKeys = sqliteTable('api_keys', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   keyHash: text('key_hash').notNull(),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const schedules = sqliteTable('schedules', {
+  id: text('id').primaryKey(),
+  baseUrl: text('base_url').notNull(),
+  config: text('config'), // JSON — same format as crawls.config
+  frequency: text('frequency').notNull().default('weekly'), // daily, weekly, monthly, or cron
+  nextRunAt: text('next_run_at').notNull(),
+  lastRunAt: text('last_run_at'),
+  active: integer('active', { mode: 'boolean' }).notNull().default(true),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
 });

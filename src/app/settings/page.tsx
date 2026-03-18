@@ -5,6 +5,8 @@ import { Header } from '@/components/layout/header';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { WebhookManager } from '@/components/settings/webhook-manager';
+import { ApiKeyManager } from '@/components/settings/api-key-manager';
 import { Cpu, HardDrive, RefreshCw } from 'lucide-react';
 
 interface Model {
@@ -37,7 +39,7 @@ export default function SettingsPage() {
     <>
       <Header
         title="Settings"
-        description="Configure models and crawler defaults"
+        description="Configure models, webhooks, and API access"
       />
 
       <div className="space-y-6 max-w-2xl">
@@ -117,6 +119,9 @@ export default function SettingsPage() {
             </p>
           </div>
         </Card>
+
+        <WebhookManager />
+        <ApiKeyManager />
       </div>
     </>
   );

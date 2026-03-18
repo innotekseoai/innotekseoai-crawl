@@ -21,6 +21,7 @@ export const GeoPageAnalysisSchema = z.object({
   authority_score: z.number().min(1).max(10),
   geo_recommendations: z.array(z.string()),
   confidence_score: z.number().min(0).max(1).optional(),
+  score_explanations: z.record(z.string(), z.string()).optional(),
 });
 
 export type GeoPageAnalysis = z.infer<typeof GeoPageAnalysisSchema>;

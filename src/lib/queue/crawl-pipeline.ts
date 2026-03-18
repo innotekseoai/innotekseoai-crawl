@@ -361,6 +361,7 @@ export async function runPipeline(opts: PipelineOptions) {
           authorityScore: analysis.authority_score,
           geoRecommendations: JSON.stringify(analysis.geo_recommendations),
           confidenceScore: analysis.confidence_score ?? null,
+          scoreExplanations: analysis.score_explanations ? JSON.stringify(analysis.score_explanations) : null,
           createdAt: new Date().toISOString(),
         });
 

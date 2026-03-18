@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db/client';
 import { crawls, crawlPages, pageAnalyses } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { withAuth } from '@/lib/auth/with-auth';
 
-export async function GET(
+export const GET = withAuth(async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -111,4 +112,4 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+});

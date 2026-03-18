@@ -13,14 +13,39 @@ interface CrawlRow {
   createdAt: string;
 }
 
-export function CrawlList({ crawls }: { crawls: CrawlRow[] }) {
+interface CrawlListProps {
+  crawls: CrawlRow[];
+  selectedIds?: Set<string>;
+  onSelectionChange?: (ids: Set<string>) => void;
+}
+
+export function CrawlList({ crawls, selectedIds, onSelectionChange }: CrawlListProps) {
+  const selectable = !!onSelectionChange;
+
   if (crawls.length === 0) {
     return (
       <div className="text-center py-16 text-muted">
-        <p className="text-lg mb-2">No crawls yet</p>
-        <p className="text-sm">Start your first crawl to see results here.</p>
+        <p className="text-lg mb-2">No crawls found</p>
+        <p className="text-sm">Try adjusting your filters or start a new crawl.</p>
       </div>
     );
+  }
+
+  function toggleSelect(id: string) {
+    if (!selectedIds || !onSelectionChange) return;
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onSelectionChange(next);
+  }
+
+  function toggleAll() {
+    if (!selectedIds || !onSelectionChange) return;
+    if (selectedIds.size === crawls.length) {
+      onSelectionChange(new Set());
+    } else {
+      onSelectionChange(new Set(crawls.map((c) => c.id)));
+    }
   }
 
   return (
@@ -28,6 +53,16 @@ export function CrawlList({ crawls }: { crawls: CrawlRow[] }) {
       <table className="w-full text-sm min-w-[540px]">
         <thead>
           <tr className="border-b border-border text-muted text-left">
+            {selectable && (
+              <th className="pb-3 pr-2 w-8">
+                <input
+                  type="checkbox"
+                  checked={selectedIds?.size === crawls.length && crawls.length > 0}
+                  onChange={toggleAll}
+                  className="accent-accent"
+                />
+              </th>
+            )}
             <th className="pb-3 pr-4 font-medium">URL</th>
             <th className="pb-3 pr-4 font-medium">Status</th>
             <th className="pb-3 pr-4 font-medium">Pages</th>
@@ -39,6 +74,16 @@ export function CrawlList({ crawls }: { crawls: CrawlRow[] }) {
         <tbody>
           {crawls.map((crawl) => (
             <tr key={crawl.id} className="border-b border-border/50 hover:bg-surface2/50 transition-colors">
+              {selectable && (
+                <td className="py-3 pr-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds?.has(crawl.id) ?? false}
+                    onChange={() => toggleSelect(crawl.id)}
+                    className="accent-accent"
+                  />
+                </td>
+              )}
               <td className="py-3 pr-4">
                 <Link href={`/crawl/${crawl.id}`} className="text-accent hover:underline truncate block max-w-xs">
                   {crawl.baseUrl}

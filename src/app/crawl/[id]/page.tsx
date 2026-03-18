@@ -54,6 +54,7 @@ interface CrawlData {
     trustSignalsScore: number | null;
     authorityScore: number | null;
     geoRecommendations: string | null;
+    scoreExplanations: string | null;
   }>;
 }
 
@@ -435,7 +436,8 @@ export default function CrawlDetailPage({ params }: { params: Promise<{ id: stri
                  (a.entityRichnessScore ?? 0) + (a.citationReadinessScore ?? 0) + (a.technicalSeoScore ?? 0) +
                  (a.userIntentAlignmentScore ?? 0) + (a.trustSignalsScore ?? 0) + (a.authorityScore ?? 0)) / 9
               ) : null;
-              return { ...p, index: i, analysis: a ?? null, avgScore };
+              const explanations: Record<string, string> = a?.scoreExplanations ? JSON.parse(a.scoreExplanations) : {};
+              return { ...p, index: i, analysis: a ?? null, avgScore, explanations };
             });
 
             // Sort if field selected
@@ -490,9 +492,15 @@ export default function CrawlDetailPage({ params }: { params: Promise<{ id: stri
                           <td className="py-2 pr-4 text-muted">{p.index + 1}</td>
                           <td className="py-2 pr-4 text-accent truncate max-w-[200px]">{p.url}</td>
                           <td className="py-2 pr-2"><PageScoreCell score={p.avgScore} /></td>
-                          <td className="py-2 pr-2"><PageScoreCell score={p.analysis?.entityClarityScore ?? null} /></td>
-                          <td className="py-2 pr-2"><PageScoreCell score={p.analysis?.contentQualityScore ?? null} /></td>
-                          <td className="py-2 pr-2"><PageScoreCell score={p.analysis?.technicalSeoScore ?? null} /></td>
+                          <td className="py-2 pr-2" title={p.explanations.entity_clarity || undefined}>
+                            <PageScoreCell score={p.analysis?.entityClarityScore ?? null} />
+                          </td>
+                          <td className="py-2 pr-2" title={p.explanations.content_quality || undefined}>
+                            <PageScoreCell score={p.analysis?.contentQualityScore ?? null} />
+                          </td>
+                          <td className="py-2 pr-2" title={p.explanations.technical_seo || undefined}>
+                            <PageScoreCell score={p.analysis?.technicalSeoScore ?? null} />
+                          </td>
                           <td className="py-2 text-muted font-mono">
                             {p.charCount ? `${(p.charCount / 1000).toFixed(1)}k` : '--'}
                           </td>

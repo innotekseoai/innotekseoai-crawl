@@ -5,8 +5,9 @@ import { crawls, crawlPages, pageAnalyses } from '@/lib/db/schema';
 import { taskManager } from '@/lib/queue/task-manager';
 import { eq } from 'drizzle-orm';
 import { readPage } from '@/lib/storage/markdown-store';
+import { withAuth } from '@/lib/auth/with-auth';
 
-export async function POST(request: NextRequest) {
+export const POST = withAuth(async function POST(request: NextRequest) {
   try {
     const { crawlId, modelPath } = await request.json();
 
@@ -126,4 +127,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

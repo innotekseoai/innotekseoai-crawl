@@ -1,7 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { readdirSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { withAuth } from '@/lib/auth/with-auth';
 
 const MODELS_DIR = resolve('./data/models');
 
@@ -28,7 +29,7 @@ function isQ4_0(filename: string): boolean {
   return filename.includes('q4_0') || filename.includes('Q4_0');
 }
 
-export async function GET() {
+export const GET = withAuth(async function GET(_request: NextRequest) {
   try {
     if (!existsSync(MODELS_DIR)) {
       return NextResponse.json({ models: [], defaultModel: null, serverModel: null });
@@ -77,4 +78,4 @@ export async function GET() {
       { status: 500 }
     );
   }
-}
+});

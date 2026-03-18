@@ -3,8 +3,9 @@ import { getDb } from '@/lib/db/client';
 import { crawls } from '@/lib/db/schema';
 import { runPipeline } from '@/lib/queue/crawl-pipeline';
 import { eq } from 'drizzle-orm';
+import { withAuth } from '@/lib/auth/with-auth';
 
-export async function POST(
+export const POST = withAuth(async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -26,12 +27,12 @@ export async function POST(
     let analyze = false;
     let modelPath: string | undefined;
     let maxDepth: number | undefined;
-    if (crawl.siteMetrics) {
+    if (crawl.config) {
       try {
-        const config = JSON.parse(crawl.siteMetrics);
-        analyze = config.analyze ?? false;
-        modelPath = config.modelPath;
-        maxDepth = config.maxDepth ?? undefined;
+        const cfg = JSON.parse(crawl.config);
+        analyze = cfg.analyze ?? false;
+        modelPath = cfg.modelPath;
+        maxDepth = cfg.maxDepth ?? undefined;
       } catch { /* not config JSON, ignore */ }
     }
 
@@ -52,4 +53,4 @@ export async function POST(
       { status: 500 }
     );
   }
-}
+});

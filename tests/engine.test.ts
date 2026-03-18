@@ -103,13 +103,16 @@ describe('aggregateResults', () => {
     expect(result.pages).toHaveLength(2);
   });
 
-  it('selects homepage JSON-LD as primary', () => {
+  it('selects homepage JSON-LD as primary and upgrades to Organization', () => {
     const homeJsonLd = '{"@type":"WebSite","name":"Home"}';
     const result = aggregateResults('https://example.com', [
       { page_url: 'https://example.com/about', result: makePage({ json_ld: '{"@type":"AboutPage"}' }) },
       { page_url: 'https://example.com/', result: makePage({ json_ld: homeJsonLd }) },
     ]);
-    expect(result.primary_json_ld).toBe(homeJsonLd);
+    // Homepage WebSite type is upgraded to Organization for the primary schema
+    const parsed = JSON.parse(result.primary_json_ld);
+    expect(parsed['@type']).toBe('Organization');
+    expect(parsed.name).toBe('Home');
   });
 
   it('throws for empty results', () => {

@@ -2,17 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db/client';
 import { crawls } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { withAuth } from '@/lib/auth/with-auth';
 
 function parseMetrics(siteMetrics: string | null) {
   if (!siteMetrics) return null;
   try {
-    const parsed = JSON.parse(siteMetrics);
-    if (!parsed.overall_grade) return null;
-    return parsed;
+    return JSON.parse(siteMetrics);
   } catch { return null; }
 }
 
-export async function GET(request: NextRequest) {
+export const GET = withAuth(async function GET(request: NextRequest) {
   const a = request.nextUrl.searchParams.get('a');
   const b = request.nextUrl.searchParams.get('b');
 
@@ -77,4 +76,4 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});
